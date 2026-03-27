@@ -1,0 +1,18 @@
+[package]
+name = "gradstep"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Training infrastructure primitives: optimizers, LR schedules, gradient clipping, early stopping"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/arclabs561/gradstep"
+categories = ["science", "algorithms"]
+keywords = ["optimizer", "training", "machine-learning", "gradient-descent", "learning-rate"]
+
+[dependencies]
+rand = "0.9"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+serde = ["dep:serde"]
