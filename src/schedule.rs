@@ -100,6 +100,156 @@ impl LrSchedule for StepDecay {
     }
 }
 
+/// Inverse square root decay with linear warmup (Vaswani et al., 2017).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct InverseSqrt {
+    pub warmup_steps: usize,
+    pub init_lr_scale: f32,
+}
+
+impl InverseSqrt {
+    pub fn new(warmup_steps: usize) -> Self {
+        Self {
+            warmup_steps,
+            init_lr_scale: 0.0,
+        }
+    }
+
+    pub fn with_init_lr_scale(mut self, scale: f32) -> Self {
+        self.init_lr_scale = scale;
+        self
+    }
+}
+
+impl LrSchedule for InverseSqrt {
+    fn lr_at(&self, step: usize, base_lr: f32) -> f32 {
+        if self.warmup_steps == 0 {
+            if step == 0 {
+                return base_lr;
+            }
+            return base_lr / (step as f32).sqrt();
+        }
+        if step < self.warmup_steps {
+            let progress = step as f32 / self.warmup_steps as f32;
+            let init = self.init_lr_scale * base_lr;
+            init + (base_lr - init) * progress
+        } else {
+            base_lr * (self.warmup_steps as f32).sqrt() / (step as f32).sqrt()
+        }
+    }
+}
+
+/// OneCycle learning rate policy (Smith, 2018).
+///
+/// Phase 1: cosine anneal from initial_lr to max_lr.
+/// Phase 2: cosine anneal from max_lr to min_lr.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct OneCycleLr {
+    pub total_steps: usize,
+    pub max_lr_scale: f32,
+    pub pct_start: f32,
+    pub div_factor: f32,
+    pub final_div_factor: f32,
+}
+
+impl OneCycleLr {
+    pub fn new(total_steps: usize) -> Self {
+        Self {
+            total_steps,
+            max_lr_scale: 10.0,
+            pct_start: 0.3,
+            div_factor: 25.0,
+            final_div_factor: 1e4,
+        }
+    }
+
+    pub fn with_max_lr_scale(mut self, scale: f32) -> Self {
+        self.max_lr_scale = scale;
+        self
+    }
+
+    pub fn with_pct_start(mut self, pct: f32) -> Self {
+        self.pct_start = pct;
+        self
+    }
+
+    pub fn with_div_factor(mut self, factor: f32) -> Self {
+        self.div_factor = factor;
+        self
+    }
+
+    pub fn with_final_div_factor(mut self, factor: f32) -> Self {
+        self.final_div_factor = factor;
+        self
+    }
+}
+
+impl LrSchedule for OneCycleLr {
+    fn lr_at(&self, step: usize, base_lr: f32) -> f32 {
+        let max_lr = base_lr * self.max_lr_scale;
+        let initial_lr = max_lr / self.div_factor;
+        let min_lr = initial_lr / self.final_div_factor;
+
+        if self.total_steps == 0 {
+            return initial_lr;
+        }
+
+        let progress = step as f32 / self.total_steps as f32;
+        let up_end = self.pct_start;
+
+        if progress >= 1.0 {
+            return min_lr;
+        }
+
+        if progress < up_end {
+            // Phase 1: cosine anneal from initial_lr to max_lr
+            let pct = progress / up_end;
+            let cos = (1.0 + (pct * std::f32::consts::PI).cos()) / 2.0;
+            max_lr - (max_lr - initial_lr) * cos
+        } else {
+            // Phase 2: cosine anneal from max_lr to min_lr
+            let pct = (progress - up_end) / (1.0 - up_end);
+            let cos = (1.0 + (pct * std::f32::consts::PI).cos()) / 2.0;
+            min_lr + (max_lr - min_lr) * cos
+        }
+    }
+}
+
+/// Compose multiple schedules sequentially at milestone steps.
+pub struct SequentialSchedule {
+    schedules: Vec<(usize, Box<dyn LrSchedule>)>,
+}
+
+impl SequentialSchedule {
+    /// Create from a list of `(milestone_step, schedule)` pairs.
+    /// Each schedule is active from the previous milestone (or 0) until its milestone.
+    pub fn new(schedules: Vec<(usize, Box<dyn LrSchedule>)>) -> Self {
+        Self { schedules }
+    }
+}
+
+impl LrSchedule for SequentialSchedule {
+    fn lr_at(&self, step: usize, base_lr: f32) -> f32 {
+        let mut prev_milestone = 0;
+        for (milestone, sched) in &self.schedules {
+            if step < *milestone {
+                let local_step = step - prev_milestone;
+                return sched.lr_at(local_step, base_lr);
+            }
+            prev_milestone = *milestone;
+        }
+        // Past all milestones: use the last schedule.
+        if let Some((milestone, sched)) = self.schedules.last() {
+            let local_step = step - milestone;
+            sched.lr_at(local_step, base_lr)
+        } else {
+            base_lr
+        }
+    }
+}
+
 /// Wraps an optimizer with a learning rate schedule.
 #[derive(Debug, Clone)]
 pub struct ScheduledOptimizer<O, S> {
@@ -219,6 +369,132 @@ mod tests {
         assert!((sched.lr_at(10, 1.0) - 0.5).abs() < 1e-6);
         assert!((sched.lr_at(20, 1.0) - 0.25).abs() < 1e-6);
         assert!((sched.lr_at(30, 1.0) - 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_inverse_sqrt_warmup() {
+        let sched = InverseSqrt::new(100);
+
+        assert!((sched.lr_at(0, 1.0) - 0.0).abs() < 1e-6);
+        assert!((sched.lr_at(50, 1.0) - 0.5).abs() < 1e-6);
+        assert!((sched.lr_at(100, 1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_inverse_sqrt_decay() {
+        let sched = InverseSqrt::new(100);
+
+        let at_100 = sched.lr_at(100, 1.0);
+        let at_400 = sched.lr_at(400, 1.0);
+
+        // At step 400: 1.0 * sqrt(100) / sqrt(400) = 10/20 = 0.5
+        assert!((at_400 - 0.5).abs() < 1e-4, "Expected 0.5, got {}", at_400);
+        assert!(at_400 < at_100, "Decay should reduce LR");
+    }
+
+    #[test]
+    fn test_one_cycle_lr_shape() {
+        let sched = OneCycleLr::new(1000)
+            .with_max_lr_scale(10.0)
+            .with_pct_start(0.3);
+
+        let base_lr = 0.01;
+        let max_lr = base_lr * 10.0;
+        let initial_lr = max_lr / 25.0;
+        let min_lr = initial_lr / 1e4;
+
+        // At start: initial_lr
+        let at_0 = sched.lr_at(0, base_lr);
+        assert!(
+            (at_0 - initial_lr).abs() < 1e-6,
+            "Start: expected {}, got {}",
+            initial_lr,
+            at_0
+        );
+
+        // At peak (step 300): max_lr
+        let at_peak = sched.lr_at(300, base_lr);
+        assert!(
+            (at_peak - max_lr).abs() < 1e-4,
+            "Peak: expected {}, got {}",
+            max_lr,
+            at_peak
+        );
+
+        // At end: min_lr
+        let at_end = sched.lr_at(1000, base_lr);
+        assert!(
+            (at_end - min_lr).abs() < 1e-8,
+            "End: expected {}, got {}",
+            min_lr,
+            at_end
+        );
+    }
+
+    #[test]
+    fn test_sequential_schedule() {
+        let sched = SequentialSchedule::new(vec![
+            (100, Box::new(LinearWarmup { warmup_steps: 100 })),
+            (
+                200,
+                Box::new(CosineAnnealing {
+                    t_max: 100,
+                    eta_min: 0.0,
+                }),
+            ),
+        ]);
+
+        // In warmup phase
+        let at_50 = sched.lr_at(50, 1.0);
+        assert!(
+            (at_50 - 0.5).abs() < 1e-6,
+            "Warmup midpoint: expected 0.5, got {}",
+            at_50
+        );
+
+        // At boundary: warmup ends
+        let at_100 = sched.lr_at(100, 1.0);
+        // Now in cosine phase, local step 0 -> base_lr
+        assert!(
+            (at_100 - 1.0).abs() < 1e-6,
+            "Cosine start: expected 1.0, got {}",
+            at_100
+        );
+
+        // Cosine midpoint
+        let at_150 = sched.lr_at(150, 1.0);
+        assert!(
+            (at_150 - 0.5).abs() < 1e-3,
+            "Cosine mid: expected ~0.5, got {}",
+            at_150
+        );
+    }
+
+    #[test]
+    fn test_wsd_via_sequential() {
+        // Warmup-Stable-Decay
+        let sched = SequentialSchedule::new(vec![
+            (100, Box::new(LinearWarmup { warmup_steps: 100 })),
+            (800, Box::new(ConstantLr)),
+            (
+                1000,
+                Box::new(CosineAnnealing {
+                    t_max: 200,
+                    eta_min: 0.0,
+                }),
+            ),
+        ]);
+
+        // Warmup
+        assert!((sched.lr_at(50, 1.0) - 0.5).abs() < 1e-6);
+
+        // Stable
+        assert!((sched.lr_at(500, 1.0) - 1.0).abs() < 1e-6);
+
+        // Decay
+        let at_900 = sched.lr_at(900, 1.0);
+        assert!(at_900 < 1.0, "Decay phase should reduce LR, got {}", at_900);
+        assert!(at_900 > 0.0, "Decay phase mid should be positive");
     }
 
     #[test]
