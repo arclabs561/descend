@@ -2,7 +2,7 @@
 # https://github.com/repository-settings/app
 
 repository:
-  description: "Training infrastructure: optimizers, LR schedules, gradient clipping"
+  description: "Training loop primitives for gradient-based optimization"
   homepage: "https://github.com/arclabs561/descend"
   private: false
   has_issues: true
