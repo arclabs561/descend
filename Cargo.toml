@@ -1,6 +1,6 @@
 [package]
 name = "descend"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Training infrastructure primitives: optimizers, LR schedules, gradient clipping, early stopping"
@@ -11,10 +11,15 @@ readme = "README.md"
 categories = ["science", "algorithms"]
 keywords = ["optimizer", "training", "machine-learning", "gradient-descent", "learning-rate"]
 
+[workspace]
+
 [dependencies]
 rand = "0.9"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"], optional = true }
+ndarray = { version = "0.16", optional = true }
+skel = { version = "0.1", optional = true }
 
 [features]
 serde = ["dep:serde"]
+riemannian = ["dep:ndarray", "dep:skel"]
