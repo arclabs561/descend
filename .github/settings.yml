@@ -2,11 +2,12 @@
 # https://github.com/repository-settings/app
 
 repository:
-  description: "Training infrastructure primitives: optimizers, LR schedules, gradient clipping, early stopping"
+  description: "Training infrastructure: optimizers, LR schedules, gradient clipping"
   homepage: "https://github.com/arclabs561/descend"
   private: false
   has_issues: true
   has_wiki: false
+  has_projects: false
   has_downloads: true
   default_branch: main
   allow_squash_merge: true
@@ -15,7 +16,7 @@ repository:
   delete_branch_on_merge: true
 
   topics:
-    - optimizer
-    - gradient-descent
-    - learning-rate
+    - machine-learning
+    - optimization
     - training
+    - deep-learning
