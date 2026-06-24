@@ -94,6 +94,7 @@ impl RiemannianAdamState {
 ///
 /// Returns the updated point on the manifold.  The `state` is modified in place
 /// with the new moments and previous point.
+#[allow(clippy::too_many_arguments)]
 pub fn riemannian_adam_step(
     manifold: &dyn Manifold,
     point: &ArrayView1<f64>,
