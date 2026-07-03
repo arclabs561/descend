@@ -14,17 +14,17 @@ descend = "0.1"
 ```
 
 ```rust
-use descend::{Adam, Optimizer, WarmupCosine, ScheduledOptimizer, LrSchedule};
+use descend::{Adam, Optimizer, WarmupCosine, LrSchedule};
 
-// Adam optimizer
-let mut opt = Adam::new(1e-3, 0.9, 0.999, 1e-8, 0.0);
-let grads = vec![vec![0.1, -0.2]];
-let params = vec![vec![1.0, 2.0]];
-let updated = opt.step(&params, &grads);
+// Adam: new takes the learning rate; builders set the rest.
+let mut opt = Adam::new(1e-3).with_betas(0.9, 0.999);
+let mut params = vec![1.0, 2.0];
+let grads = vec![0.1, -0.2];
+opt.step(&mut params, &grads); // updates params in place
 
-// LR schedule
-let schedule = WarmupCosine::new(1000, 1e-3, 100);
-let lr = schedule.lr(500);
+// Warmup + cosine LR schedule.
+let schedule = WarmupCosine { warmup_steps: 100, total_steps: 1000, eta_min: 0.0 };
+let lr = schedule.lr_at(500, 1e-3);
 ```
 
 ## Features
