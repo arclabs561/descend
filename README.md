@@ -2,9 +2,8 @@
 
 [![crates.io](https://img.shields.io/crates/v/descend.svg)](https://crates.io/crates/descend)
 [![Documentation](https://docs.rs/descend/badge.svg)](https://docs.rs/descend)
-[![CI](https://github.com/arclabs561/descend/actions/workflows/ci.yml/badge.svg)](https://github.com/arclabs561/descend/actions/workflows/ci.yml)
 
-Training infrastructure primitives: optimizers, LR schedules, gradient clipping, early stopping.
+Training loop primitives for gradient-based optimization.
 
 ## Quickstart
 
