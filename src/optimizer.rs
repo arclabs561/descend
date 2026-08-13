@@ -59,6 +59,13 @@ impl Optimizer for Sgd {
         if self.velocity.is_none() && self.momentum != 0.0 {
             self.velocity = Some(vec![0.0; n]);
         }
+        if let Some(velocity) = &self.velocity {
+            assert_eq!(
+                velocity.len(),
+                n,
+                "parameter count changed; call reset before reusing an optimizer"
+            );
+        }
 
         for i in 0..n {
             let mut g = grads[i];
@@ -165,6 +172,16 @@ impl Optimizer for Adam {
             self.m = Some(vec![0.0; n]);
             self.v = Some(vec![0.0; n]);
         }
+        assert_eq!(
+            self.m.as_ref().unwrap().len(),
+            n,
+            "parameter count changed; call reset before reusing an optimizer"
+        );
+        assert_eq!(
+            self.v.as_ref().unwrap().len(),
+            n,
+            "parameter count changed; call reset before reusing an optimizer"
+        );
 
         self.t += 1;
         let m = self.m.as_mut().unwrap();
@@ -174,9 +191,13 @@ impl Optimizer for Adam {
         let bias_correction2 = 1.0 - self.beta2.powi(self.t as i32);
 
         // RAdam: compute SMA length to decide whether variance is tractable.
-        let rho_inf = 2.0 / (1.0 - self.beta2) - 1.0;
-        let beta2_t = self.beta2.powi(self.t as i32);
-        let rho_t = rho_inf - 2.0 * self.t as f32 * beta2_t / (1.0 - beta2_t);
+        // Compute the rectification scalar in f64. For beta2 near one, the
+        // subtraction in rho_t loses enough f32 precision to perturb the
+        // first rectified steps even though moment storage remains well-behaved.
+        let beta2 = f64::from(self.beta2);
+        let rho_inf = 2.0 / (1.0 - beta2) - 1.0;
+        let beta2_t = beta2.powi(self.t as i32);
+        let rho_t = rho_inf - 2.0 * self.t as f64 * beta2_t / (1.0 - beta2_t);
 
         for i in 0..n {
             let mut g = grads[i];
@@ -202,7 +223,7 @@ impl Optimizer for Adam {
                     let rect = ((rho_t - 4.0) * (rho_t - 2.0) * rho_inf
                         / ((rho_inf - 4.0) * (rho_inf - 2.0) * rho_t))
                         .sqrt();
-                    step *= rect;
+                    step *= rect as f32;
                 }
                 step
             };
@@ -277,6 +298,11 @@ impl Optimizer for Adagrad {
         if self.sum_of_squares.is_none() {
             self.sum_of_squares = Some(vec![self.initial_accumulator_value; n]);
         }
+        assert_eq!(
+            self.sum_of_squares.as_ref().unwrap().len(),
+            n,
+            "parameter count changed; call reset before reusing an optimizer"
+        );
 
         let sos = self.sum_of_squares.as_mut().unwrap();
 
@@ -496,6 +522,25 @@ impl Optimizer for RmsProp {
                 self.momentum_buf = Some(vec![0.0; n]);
             }
         }
+        assert_eq!(
+            self.square_avg.as_ref().unwrap().len(),
+            n,
+            "parameter count changed; call reset before reusing an optimizer"
+        );
+        if let Some(grad_avg) = &self.grad_avg {
+            assert_eq!(
+                grad_avg.len(),
+                n,
+                "parameter count changed; call reset before reusing an optimizer"
+            );
+        }
+        if let Some(momentum_buf) = &self.momentum_buf {
+            assert_eq!(
+                momentum_buf.len(),
+                n,
+                "parameter count changed; call reset before reusing an optimizer"
+            );
+        }
 
         let sq = self.square_avg.as_mut().unwrap();
 
@@ -651,6 +696,163 @@ mod tests {
         let x = params[0];
         let y = params[1];
         (1.0 - x).powi(2) + 100.0 * (y - x * x).powi(2)
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 3e-6,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn sgd_momentum_matches_three_step_hand_trajectory() {
+        let mut opt = Sgd::new(0.1).with_momentum(0.5);
+        let mut params = [1.0];
+
+        for (&grad, &expected) in [1.0f32, 2.0, 0.0].iter().zip([0.9f32, 0.65, 0.525].iter()) {
+            opt.step(&mut params, &[grad]);
+            assert_close(params[0], expected);
+        }
+    }
+
+    #[test]
+    fn adam_and_adamw_match_five_step_hand_trajectories() {
+        let grads = [1.0f32, 2.0, 0.0, -1.0, 0.5];
+        let adam_expected = [1.9f32, 1.798_837_2, 1.741_288_5, 1.758_547_4, 1.742_293_1];
+        let adamw_expected = [1.88f32, 1.760_037_2, 1.684_888_1, 1.685_298_2, 1.652_190_8];
+        let mut adam = Adam::new(0.1).with_betas(0.5, 0.75).with_epsilon(0.0);
+        let mut adamw = adam.clone().with_weight_decay(0.1);
+        let mut adam_params = [2.0f32];
+        let mut adamw_params = [2.0f32];
+
+        for i in 0..grads.len() {
+            adam.step(&mut adam_params, &[grads[i]]);
+            adamw.step(&mut adamw_params, &[grads[i]]);
+            assert_close(adam_params[0], adam_expected[i]);
+            assert_close(adamw_params[0], adamw_expected[i]);
+        }
+    }
+
+    #[test]
+    fn adagrad_matches_three_step_hand_trajectory() {
+        let mut opt = Adagrad::new(0.2)
+            .with_epsilon(0.0)
+            .with_initial_accumulator_value(0.25);
+        let mut params = [2.0f32];
+        for (&grad, &expected) in [1.0f32, 2.0, 0.0]
+            .iter()
+            .zip([1.821_114_5f32, 1.646_540_3, 1.646_540_3].iter())
+        {
+            opt.step(&mut params, &[grad]);
+            assert_close(params[0], expected);
+        }
+    }
+
+    #[test]
+    fn centered_rmsprop_with_momentum_matches_hand_trajectory() {
+        let mut opt = RmsProp::new(0.1)
+            .with_alpha(0.5)
+            .with_epsilon(0.0)
+            .with_momentum(0.25)
+            .with_centered(true);
+        let mut params = [2.0f32];
+        for (&grad, &expected) in [1.0f32, 2.0, 0.0]
+            .iter()
+            .zip([1.8f32, 1.508_790_9, 1.435_988_7].iter())
+        {
+            opt.step(&mut params, &[grad]);
+            assert_close(params[0], expected);
+        }
+    }
+
+    #[test]
+    fn radam_matches_unrectified_warmup_and_first_rectified_step() {
+        let mut opt = Adam::new(0.1).with_rectified(true);
+        let mut params = [1.0f32];
+        for expected in [0.9f32, 0.8, 0.7, 0.6, 0.5] {
+            opt.step(&mut params, &[1.0]);
+            assert_close(params[0], expected);
+        }
+
+        // At t=6 with beta2=0.999, rho_t first exceeds 5. The closed-form
+        // rectification factor is 0.0258211128 for a constant unit gradient.
+        opt.step(&mut params, &[1.0]);
+        assert_close(params[0], 0.497_417_9);
+    }
+
+    #[test]
+    fn fresh_zero_gradients_leave_parameters_unchanged() {
+        let optimizers: Vec<Box<dyn Optimizer>> = vec![
+            Box::new(Sgd::new(0.1).with_momentum(0.9)),
+            Box::new(Adam::new(0.1)),
+            Box::new(Adam::new(0.1).with_rectified(true)),
+            Box::new(Adagrad::new(0.1)),
+            Box::new(RmsProp::new(0.1).with_momentum(0.9).with_centered(true)),
+        ];
+
+        for mut opt in optimizers {
+            let mut params = [1.0f32, -2.0];
+            opt.step(&mut params, &[0.0, 0.0]);
+            assert_eq!(params, [1.0, -2.0]);
+        }
+    }
+
+    fn assert_reset_matches_fresh(mut used: impl Optimizer, mut fresh: impl Optimizer) {
+        let mut discarded_params = [1.0f32];
+        used.step(&mut discarded_params, &[2.0]);
+        used.reset();
+
+        let mut reset_params = [3.0f32];
+        let mut fresh_params = [3.0f32];
+        used.step(&mut reset_params, &[-0.5]);
+        fresh.step(&mut fresh_params, &[-0.5]);
+        assert_close(reset_params[0], fresh_params[0]);
+    }
+
+    #[test]
+    fn reset_restores_fresh_optimizer_trajectory() {
+        assert_reset_matches_fresh(
+            Sgd::new(0.1).with_momentum(0.5),
+            Sgd::new(0.1).with_momentum(0.5),
+        );
+        assert_reset_matches_fresh(Adam::new(0.1), Adam::new(0.1));
+        assert_reset_matches_fresh(
+            Adam::new(0.1).with_rectified(true),
+            Adam::new(0.1).with_rectified(true),
+        );
+        assert_reset_matches_fresh(Adagrad::new(0.1), Adagrad::new(0.1));
+        assert_reset_matches_fresh(
+            RmsProp::new(0.1).with_momentum(0.5).with_centered(true),
+            RmsProp::new(0.1).with_momentum(0.5).with_centered(true),
+        );
+    }
+
+    fn assert_shape_change_requires_reset(mut opt: impl Optimizer) {
+        let mut two = [1.0f32, 2.0];
+        opt.step(&mut two, &[0.5, 0.25]);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut one = [1.0f32];
+            opt.step(&mut one, &[0.5]);
+        }));
+        assert!(result.is_err());
+
+        opt.reset();
+        let mut one = [1.0f32];
+        opt.step(&mut one, &[0.5]);
+        assert!(one[0].is_finite());
+    }
+
+    #[test]
+    fn stateful_optimizers_require_reset_before_parameter_shape_change() {
+        assert_shape_change_requires_reset(Sgd::new(0.1).with_momentum(0.5));
+        assert_shape_change_requires_reset(Adam::new(0.1));
+        assert_shape_change_requires_reset(Adam::new(0.1).with_rectified(true));
+        assert_shape_change_requires_reset(Adagrad::new(0.1));
+        assert_shape_change_requires_reset(
+            RmsProp::new(0.1).with_momentum(0.5).with_centered(true),
+        );
     }
 
     #[test]
