@@ -634,7 +634,9 @@ impl Optimizer for Lion {
             let g = grads[i];
 
             // Compute update direction from interpolation of momentum and gradient.
-            let update = (self.beta1 * m[i] + (1.0 - self.beta1) * g).signum();
+            // sign(0) = 0, unlike f32::signum which returns 1 for +0.0.
+            let c = self.beta1 * m[i] + (1.0 - self.beta1) * g;
+            let update = if c == 0.0 { 0.0 } else { c.signum() };
 
             // Update momentum for next step.
             m[i] = self.beta2 * m[i] + (1.0 - self.beta2) * g;
@@ -1069,6 +1071,15 @@ mod tests {
             "Lion did not converge: {}",
             params[0]
         );
+    }
+
+    #[test]
+    fn lion_does_not_move_on_zero_gradient() {
+        // Lion's update is sign(c), and sign(0) = 0 (Chen et al. 2023).
+        let mut opt = Lion::new(0.1);
+        let mut params = vec![1.0, -2.0];
+        opt.step(&mut params, &[0.0, 0.0]);
+        assert_eq!(params, vec![1.0, -2.0]);
     }
 
     #[test]

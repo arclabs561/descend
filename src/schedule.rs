@@ -74,7 +74,7 @@ impl LrSchedule for WarmupCosine {
             return base_lr * (step as f32 / self.warmup_steps as f32);
         }
 
-        let cosine_steps = self.total_steps - self.warmup_steps;
+        let cosine_steps = self.total_steps.saturating_sub(self.warmup_steps);
         if cosine_steps == 0 || step >= self.total_steps {
             return self.eta_min;
         }
@@ -355,6 +355,18 @@ mod tests {
         // Cosine phase
         let at_end = sched.lr_at(110, 1.0);
         assert!(at_end.abs() < 1e-4, "end was {}", at_end);
+    }
+
+    #[test]
+    fn warmup_cosine_total_below_warmup_does_not_underflow() {
+        let sched = WarmupCosine {
+            warmup_steps: 10,
+            total_steps: 5,
+            eta_min: 0.1,
+        };
+        assert!((sched.lr_at(3, 1.0) - 0.3).abs() < 1e-6);
+        assert_eq!(sched.lr_at(10, 1.0), 0.1);
+        assert_eq!(sched.lr_at(50, 1.0), 0.1);
     }
 
     #[test]
