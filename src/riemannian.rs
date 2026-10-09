@@ -29,13 +29,40 @@
 use ndarray::{Array1, ArrayView1};
 use skel::Manifold;
 
+/// Orthogonal projection of an ambient vector onto the tangent space at `point`.
+///
+/// `skel::Manifold` has no tangent projection, so this differentiates the
+/// manifold's nearest-point map: for an embedded submanifold, the derivative
+/// of `project` at `point` is the orthogonal projection onto `T_point M`. It
+/// is evaluated by a central difference with a step of `1e-6 * max(|x|, 1)`
+/// in ambient units, which keeps the error near `1e-10` relative to `|v|`.
+/// For unconstrained manifolds (`project` is the identity) it returns `v`.
+fn project_to_tangent(
+    manifold: &dyn Manifold,
+    point: &ArrayView1<f64>,
+    v: &ArrayView1<f64>,
+) -> Array1<f64> {
+    let v_norm = v.iter().map(|vi| vi * vi).sum::<f64>().sqrt();
+    if v_norm == 0.0 || !v_norm.is_finite() {
+        return v.to_owned();
+    }
+    let x_norm = point.iter().map(|xi| xi * xi).sum::<f64>().sqrt();
+    let h = 1e-6 * x_norm.max(1.0) / v_norm;
+    let plus = manifold.project(&(point + &(v * h)).view());
+    let minus = manifold.project(&(point - &(v * h)).view());
+    (plus - minus) / (2.0 * h)
+}
+
 /// Riemannian SGD step.
 ///
 /// Given a point on the manifold and a Euclidean gradient, computes:
 ///
-/// 1. Project the gradient to the tangent space (via `log_map` identity, then
-///    correct with `project` -- for most manifolds the Euclidean gradient
-///    projected to the tangent space is the Riemannian gradient).
+/// 1. Project the gradient onto the tangent space at `point`. For a
+///    submanifold with the induced metric (such as the sphere) this is the
+///    Riemannian gradient (Absil et al. 2008, Sec. 3.6.1); the normal
+///    component is discarded, so it cannot push the step off the manifold.
+///    Manifolds with a non-induced metric (for example the Poincare ball)
+///    need the caller to rescale the gradient first.
 /// 2. Step along the geodesic: `x_new = exp_map(x, -lr * grad)`.
 /// 3. Project back to the manifold (numerical correction).
 ///
@@ -46,8 +73,9 @@ pub fn riemannian_sgd_step(
     euclidean_grad: &ArrayView1<f64>,
     lr: f64,
 ) -> Array1<f64> {
+    let grad = project_to_tangent(manifold, point, euclidean_grad);
     // Negate and scale the gradient to get the tangent vector for descent.
-    let neg_grad: Array1<f64> = euclidean_grad.mapv(|g| -lr * g);
+    let neg_grad: Array1<f64> = grad.mapv(|g| -lr * g);
     // Follow the geodesic from point in direction of negative gradient.
     let stepped = manifold.exp_map(point, &neg_grad.view());
     // Project back to the manifold to correct numerical drift.
@@ -88,8 +116,11 @@ impl RiemannianAdamState {
 /// Extends Adam to Riemannian manifolds:
 ///
 /// 1. Parallel-transport previous moments from `T_{prev} M` to `T_{current} M`.
-/// 2. Update first and second moments with the current Riemannian gradient.
-/// 3. Compute bias-corrected update direction.
+/// 2. Update first and second moments with the current Riemannian gradient
+///    (the Euclidean gradient projected onto the tangent space, as in
+///    [`riemannian_sgd_step`]).
+/// 3. Compute the bias-corrected update direction and project it onto the
+///    tangent space (the coordinate-wise scaling can leave it).
 /// 4. Follow the geodesic via `exp_map` and project back to the manifold.
 ///
 /// Returns the updated point on the manifold.  The `state` is modified in place
@@ -113,15 +144,17 @@ pub fn riemannian_adam_step(
 
     state.t += 1;
 
+    let grad = project_to_tangent(manifold, point, euclidean_grad);
+
     // Update moments in the current tangent space.
     // m_t = beta1 * m_{t-1} + (1 - beta1) * grad
     // v_t = beta2 * v_{t-1} + (1 - beta2) * grad^2  (element-wise)
-    let dim = euclidean_grad.len();
+    let dim = grad.len();
     let mut m_new = Array1::zeros(dim);
     let mut v_new = Array1::zeros(dim);
     for i in 0..dim {
-        m_new[i] = beta1 * m_transported[i] + (1.0 - beta1) * euclidean_grad[i];
-        v_new[i] = beta2 * state.v[i] + (1.0 - beta2) * euclidean_grad[i] * euclidean_grad[i];
+        m_new[i] = beta1 * m_transported[i] + (1.0 - beta1) * grad[i];
+        v_new[i] = beta2 * state.v[i] + (1.0 - beta2) * grad[i] * grad[i];
     }
 
     // Bias correction.
@@ -137,6 +170,7 @@ pub fn riemannian_adam_step(
     }
 
     // Follow the geodesic and project.
+    let update = project_to_tangent(manifold, point, &update.view());
     let stepped = manifold.exp_map(point, &update.view());
     let result = manifold.project(&stepped.view());
 
@@ -262,6 +296,60 @@ mod tests {
             assert!(
                 (a - b).abs() < 1e-12,
                 "zero-grad SGD changed the point: {x} -> {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn sgd_ignores_the_normal_component_of_the_gradient() {
+        // On the unit sphere the Riemannian gradient is the Euclidean gradient
+        // projected onto T_x S = {v : <v, x> = 0} (Absil et al. 2008, 3.6.1).
+        // f(x) = |x|^2 is constant on the sphere: its gradient 2x is normal,
+        // so a step must leave x where it is, not send it to the antipode.
+        let m = Sphere;
+        let x = array![1.0, 0.0, 0.0];
+        let normal = array![2.0, 0.0, 0.0];
+        let result = riemannian_sgd_step(&m, &x.view(), &normal.view(), 1.0);
+        for (a, b) in x.iter().zip(result.iter()) {
+            assert!(
+                (a - b).abs() < 1e-8,
+                "normal gradient moved {x} to {result}"
+            );
+        }
+
+        // A mixed gradient moves exactly like its tangent part.
+        let mixed = array![5.0, 0.3, -0.2];
+        let tangent = array![0.0, 0.3, -0.2];
+        let got = riemannian_sgd_step(&m, &x.view(), &mixed.view(), 0.5);
+        let want = riemannian_sgd_step(&m, &x.view(), &tangent.view(), 0.5);
+        for (a, b) in got.iter().zip(want.iter()) {
+            assert!((a - b).abs() < 1e-8, "mixed {got} vs tangent-only {want}");
+        }
+    }
+
+    #[test]
+    fn adam_ignores_the_normal_component_of_the_gradient() {
+        let m = Sphere;
+        let x = array![0.0, 0.0, 1.0];
+        let mut state = RiemannianAdamState::new(x.clone());
+        let mut point = x.clone();
+        for _ in 0..5 {
+            let normal = point.mapv(|p| 2.0 * p);
+            point = riemannian_adam_step(
+                &m,
+                &point.view(),
+                &normal.view(),
+                &mut state,
+                1.0,
+                0.9,
+                0.999,
+                1e-8,
+            );
+        }
+        for (a, b) in x.iter().zip(point.iter()) {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "normal gradients moved {x} to {point}"
             );
         }
     }
