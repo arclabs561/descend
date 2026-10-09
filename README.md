@@ -5,6 +5,11 @@
 
 Training loop primitives for gradient-based optimization.
 
+`descend` updates plain `f32` parameter slices with gradients you compute
+yourself, so it fits hand-written training loops without a tensor framework.
+Burn and candle ship optimizers that update their own tensors; inside those
+frameworks, use theirs.
+
 ## Quickstart
 
 ```toml
@@ -34,6 +39,7 @@ let lr = schedule.lr_at(500, 1e-3);
 - Early stopping with patience and delta
 - Gradient accumulation
 - Exponential moving average
+- Riemannian SGD and Adam over `skel::Manifold` (feature `riemannian`)
 
 ## License
 

@@ -25,6 +25,8 @@
 //! - `riemannian` (feature `riemannian`): Riemannian SGD/Adam steps and geodesic
 //!   distance for optimization on manifolds.
 
+#![doc = include_str!("../README.md")]
+
 pub mod accumulator;
 pub mod early_stopping;
 pub mod ema;

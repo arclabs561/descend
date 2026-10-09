@@ -8,8 +8,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/arclabs561/descend"
 homepage = "https://github.com/arclabs561/descend"
 readme = "README.md"
+documentation = "https://docs.rs/descend"
 categories = ["science", "algorithms"]
 keywords = ["optimizer", "training", "machine-learning", "gradient-descent", "learning-rate"]
+exclude = ["/.github", "/.gitignore"]
 
 [workspace]
 
