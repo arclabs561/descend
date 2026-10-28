@@ -5,10 +5,8 @@
 
 Training loop primitives for gradient-based optimization.
 
-`descend` updates plain `f32` parameter slices with gradients you compute
-yourself, so it fits hand-written training loops without a tensor framework.
-Burn and candle ship optimizers that update their own tensors; inside those
-frameworks, use theirs.
+`descend` updates `f32` parameter slices with gradients you supply. Use it in
+training loops where you manage the parameters and gradient computation.
 
 ## Quickstart
 
@@ -25,10 +23,12 @@ let mut opt = Adam::new(1e-3).with_betas(0.9, 0.999);
 let mut params = vec![1.0, 2.0];
 let grads = vec![0.1, -0.2];
 opt.step(&mut params, &grads); // updates params in place
+assert!(params[0] < 1.0 && params[1] > 2.0);
 
 // Warmup + cosine LR schedule.
 let schedule = WarmupCosine { warmup_steps: 100, total_steps: 1000, eta_min: 0.0 };
 let lr = schedule.lr_at(500, 1e-3);
+opt.set_lr(lr); // use the scheduled rate for the next step
 ```
 
 ## Features
@@ -40,6 +40,8 @@ let lr = schedule.lr_at(500, 1e-3);
 - Gradient accumulation
 - Exponential moving average
 - Riemannian SGD and Adam over `skel::Manifold` (feature `riemannian`)
+
+Enable the optional `serde` feature to serialize supported optimizer and schedule types.
 
 ## License
 
