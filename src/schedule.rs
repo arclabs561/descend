@@ -225,6 +225,7 @@ pub struct SequentialSchedule {
 impl SequentialSchedule {
     /// Create from a list of `(milestone_step, schedule)` pairs.
     /// Each schedule is active from the previous milestone (or 0) until its milestone.
+    /// The final schedule continues past its milestone without restarting.
     pub fn new(schedules: Vec<(usize, Box<dyn LrSchedule>)>) -> Self {
         Self { schedules }
     }
@@ -233,20 +234,14 @@ impl SequentialSchedule {
 impl LrSchedule for SequentialSchedule {
     fn lr_at(&self, step: usize, base_lr: f32) -> f32 {
         let mut prev_milestone = 0;
-        for (milestone, sched) in &self.schedules {
-            if step < *milestone {
+        for (index, (milestone, sched)) in self.schedules.iter().enumerate() {
+            if step < *milestone || index + 1 == self.schedules.len() {
                 let local_step = step - prev_milestone;
                 return sched.lr_at(local_step, base_lr);
             }
             prev_milestone = *milestone;
         }
-        // Past all milestones: use the last schedule.
-        if let Some((milestone, sched)) = self.schedules.last() {
-            let local_step = step - milestone;
-            sched.lr_at(local_step, base_lr)
-        } else {
-            base_lr
-        }
+        base_lr
     }
 }
 
@@ -507,6 +502,35 @@ mod tests {
         let at_900 = sched.lr_at(900, 1.0);
         assert!(at_900 < 1.0, "Decay phase should reduce LR, got {}", at_900);
         assert!(at_900 > 0.0, "Decay phase mid should be positive");
+    }
+
+    #[test]
+    fn sequential_final_schedule_does_not_restart_at_its_milestone() {
+        let sched = SequentialSchedule::new(vec![
+            (10, Box::new(ConstantLr)),
+            (
+                20,
+                Box::new(CosineAnnealing {
+                    t_max: 10,
+                    eta_min: 0.01,
+                }),
+            ),
+        ]);
+
+        assert!(sched.lr_at(19, 1.0) < 0.04);
+        for step in [20, 21, 30] {
+            assert_eq!(sched.lr_at(step, 1.0), 0.01, "step {step}");
+        }
+    }
+
+    #[test]
+    fn sequential_single_schedule_matches_unwrapped_schedule() {
+        let warmup = LinearWarmup { warmup_steps: 10 };
+        let sched = SequentialSchedule::new(vec![(10, Box::new(warmup.clone()))]);
+
+        for step in [0, 5, 9, 10, 11, 20] {
+            assert_eq!(sched.lr_at(step, 1.0), warmup.lr_at(step, 1.0));
+        }
     }
 
     #[test]
