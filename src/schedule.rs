@@ -196,21 +196,25 @@ impl LrSchedule for OneCycleLr {
             return initial_lr;
         }
 
-        let progress = step as f32 / self.total_steps as f32;
-        let up_end = self.pct_start;
+        // Phase boundaries follow PyTorch's OneCycleLR: max_lr at step
+        // pct_start * T - 1 and min_lr at step T - 1, the last step of a
+        // T-step run.
+        let step = step as f32;
+        let up_end = self.pct_start * self.total_steps as f32 - 1.0;
+        let down_end = self.total_steps as f32 - 1.0;
 
-        if progress >= 1.0 {
+        if step >= down_end {
             return min_lr;
         }
 
-        if progress < up_end {
+        if step <= up_end {
             // Phase 1: cosine anneal from initial_lr to max_lr
-            let pct = progress / up_end;
+            let pct = if up_end > 0.0 { step / up_end } else { 1.0 };
             let cos = (1.0 + (pct * std::f32::consts::PI).cos()) / 2.0;
             max_lr - (max_lr - initial_lr) * cos
         } else {
             // Phase 2: cosine anneal from max_lr to min_lr
-            let pct = (progress - up_end) / (1.0 - up_end);
+            let pct = (step - up_end) / (down_end - up_end);
             let cos = (1.0 + (pct * std::f32::consts::PI).cos()) / 2.0;
             min_lr + (max_lr - min_lr) * cos
         }
@@ -435,6 +439,34 @@ mod tests {
             "End: expected {}, got {}",
             min_lr,
             at_end
+        );
+    }
+
+    #[test]
+    fn test_one_cycle_lr_matches_pytorch_endpoints() {
+        // PyTorch OneCycleLR peaks at step pct_start * T - 1 and reaches
+        // min_lr at step T - 1, the last step a T-step run executes.
+        let t = 100;
+        let sched = OneCycleLr::new(t);
+        let base_lr = 0.01f32;
+        let max_lr = base_lr * 10.0;
+        let initial_lr = max_lr / 25.0;
+        let min_lr = initial_lr / 1e4;
+
+        let last = sched.lr_at(t - 1, base_lr);
+        assert!(
+            (last - min_lr).abs() <= 1e-3 * min_lr,
+            "Last step: expected {:e}, got {:e}",
+            min_lr,
+            last
+        );
+
+        let peak = sched.lr_at(29, base_lr);
+        assert!(
+            (peak - max_lr).abs() < 1e-6,
+            "Peak: expected {}, got {}",
+            max_lr,
+            peak
         );
     }
 
