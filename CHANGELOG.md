@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-03
+
 ### Fixed
 
+- Riemannian SGD and Adam project the Euclidean gradient onto the tangent
+  space before the exponential map. A gradient with a normal component no
+  longer sends a sphere point to its antipode.
+- `Lion` leaves a parameter unchanged when its interpolated update is zero
+  (`sign(0) = 0`); before, `f32::signum(0.0) = 1.0` stepped it.
+- `WarmupCosine` no longer underflows when `total_steps < warmup_steps`; the
+  learning rate holds at `eta_min` after warmup.
+- `SequentialSchedule` keeps counting the final schedule's local step from the
+  previous milestone past its own milestone, instead of restarting at zero.
+- RAdam (`Adam::with_rectified(true)`) computes the rectification term in
+  `f64`, which removes f32 cancellation for `beta2` near one.
+- Optimizers panic with a message to call `reset` when the parameter count
+  changes between steps.
 - `OneCycleLr` now reaches `max_lr` at step `pct_start * total_steps - 1` and
   `min_lr` at step `total_steps - 1`, matching PyTorch's `OneCycleLR`; before,
   `min_lr` was reached only at step `total_steps`, which a `total_steps`-step
