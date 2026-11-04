@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-04
+
 ### Fixed
 
 - `clip_grad_norm` accumulates the norm in `f64`. Finite gradients whose
