@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `clip_grad_norm` accumulates the norm in `f64`. Finite gradients whose
+  squared sum overflows `f32`, such as `[1e20, 1e20]`, were zeroed (the norm
+  came out infinite, so the scale was zero); they are now rescaled to
+  `max_norm`, and the returned norm is the finite original norm.
+  `torch.nn.utils.clip_grad_norm_` 2.15.0 on float32 tensors still zeroes
+  this input.
+- `GradientAccumulator::accumulate` starts a new window on the call after it
+  returns an average. Without an explicit `reset`, that call used to fold one
+  more gradient into the previous average and return the result as a new
+  average.
+- `Lamb` and `Lion` panic with "parameter count changed; call reset before
+  reusing an optimizer" when the parameter count changes, as `Sgd`, `Adam`,
+  `Adagrad` and `RmsProp` do. A smaller count used to reuse stale moment
+  state silently, and a larger one panicked on an index out of bounds.
+
 ## [0.1.2] - 2026-11-03
 
 ### Fixed

@@ -393,6 +393,11 @@ impl Optimizer for Lamb {
             self.m = Some(vec![0.0; n]);
             self.v = Some(vec![0.0; n]);
         }
+        assert_eq!(
+            self.m.as_ref().unwrap().len(),
+            n,
+            "parameter count changed; call reset before reusing an optimizer"
+        );
 
         self.t += 1;
         let m = self.m.as_mut().unwrap();
@@ -627,6 +632,11 @@ impl Optimizer for Lion {
         if self.m.is_none() {
             self.m = Some(vec![0.0; n]);
         }
+        assert_eq!(
+            self.m.as_ref().unwrap().len(),
+            n,
+            "parameter count changed; call reset before reusing an optimizer"
+        );
 
         let m = self.m.as_mut().unwrap();
 
