@@ -19,7 +19,13 @@ impl GradientAccumulator {
     }
 
     /// Accumulate gradients. Returns `Some(&averaged_grads)` when `micro_steps` reached.
+    ///
+    /// The call after one that returned an average starts a new window, so
+    /// calling [`Self::reset`] in between is optional.
     pub fn accumulate(&mut self, grads: &[f32]) -> Option<&[f32]> {
+        if self.count >= self.micro_steps {
+            self.reset();
+        }
         if self.accum.is_empty() {
             self.accum = vec![0.0; grads.len()];
         }
@@ -36,7 +42,7 @@ impl GradientAccumulator {
             for a in self.accum.iter_mut() {
                 *a *= scale;
             }
-            // Return the averaged grads; caller must call reset() after consuming.
+            // The next call resets before accumulating.
             Some(&self.accum)
         } else {
             None

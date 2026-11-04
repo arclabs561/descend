@@ -1,15 +1,23 @@
 /// Clip gradients by global norm. Returns the original norm before clipping.
+///
+/// The norm is accumulated in `f64`, so finite gradients whose squared sum
+/// overflows `f32` are still rescaled rather than zeroed. A norm too large
+/// for `f32` is returned as infinity.
 pub fn clip_grad_norm(grads: &mut [f32], max_norm: f32) -> f32 {
-    let norm: f32 = grads.iter().map(|g| g * g).sum::<f32>().sqrt();
+    let norm: f64 = grads
+        .iter()
+        .map(|&g| f64::from(g) * f64::from(g))
+        .sum::<f64>()
+        .sqrt();
 
-    if norm > max_norm {
-        let scale = max_norm / norm;
+    if norm > f64::from(max_norm) {
+        let scale = f64::from(max_norm) / norm;
         for g in grads.iter_mut() {
-            *g *= scale;
+            *g = (f64::from(*g) * scale) as f32;
         }
     }
 
-    norm
+    norm as f32
 }
 
 /// Clip each gradient element to `[-max_value, max_value]`.
